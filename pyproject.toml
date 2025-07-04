@@ -1,0 +1,15 @@
+[project]
+name = "nodectl"
+version = "0.1.0"
+description = "A simple H100 cluster node scheduler"
+authors = [
+  { name = "hyw", email = "yuweih205@email.com" }
+]
+dependencies = []
+
+[project.scripts]
+nodectl = "nodectl.main:main"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
