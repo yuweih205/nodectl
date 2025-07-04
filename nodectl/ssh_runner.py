@@ -1,49 +1,56 @@
 import subprocess
-import time
 import os
+import time
 
-def run_ssh_command(node, image_dir, run_cmd=None, run_script=None):
-    """
-    支持两种方式：
-    1. run_cmd：直接远程执行命令
-    2. run_script：本地脚本上传后在远程执行
-    都支持自动注入 WANDB_API_KEY
-    """
-    api_key = os.getenv("WANDB_API_KEY")
-    wandb_env = f"export WANDB_API_KEY={api_key} && " if api_key else ""
+KEY_PATH = "/home/boss/.ssh/h100_cluster.pem"
+USER = "boss"
 
-    ssh_cmd = ""
-
-    if run_cmd:
-        # 注入 wandb 登录
-        full_cmd = f"{wandb_env}{run_cmd}"
-        ssh_cmd = (
-            f'ssh {node} "cd {image_dir} && nohup {full_cmd} > output.log 2>&1 &"'
-        )
-
-    elif run_script:
-        remote_script = f"/tmp/remote_script_{int(time.time())}.sh"
-        scp_cmd = f"scp {run_script} {node}:{remote_script}"
-        try:
-            subprocess.check_call(scp_cmd, shell=True)
-        except subprocess.CalledProcessError:
-            print(f"[ERROR] 上传脚本失败: {node}")
-            return False
-
-        # 注入 wandb 登录
-        full_cmd = f"{wandb_env}bash {remote_script}"
-
-        ssh_cmd = (
-            f'ssh {node} "cd {image_dir} && chmod +x {remote_script} && '
-            f'nohup {full_cmd} > output.log 2>&1 &"'
-        )
-
+def build_ssh_cmd(base_cmd: str, node: str) -> list:
+    """构建带或不带密钥的 ssh/scp 命令前缀"""
+    if os.path.exists(KEY_PATH):
+        return [base_cmd, "-i", KEY_PATH, f"{USER}@{node}"]
     else:
-        raise ValueError("必须指定 run_cmd 或 run_script")
+        return [base_cmd, f"{USER}@{node}"]
 
+def run_script_remotely(node, image_dir, run_cmd=None, run_script=None, verbose=False):
     try:
-        subprocess.check_call(ssh_cmd, shell=True)
-        return True
-    except subprocess.CalledProcessError:
-        print(f"[ERROR] 执行远程命令失败: {node}")
-        return False
+        run_script = os.path.abspath(run_script) if run_script else None
+        image_dir = image_dir or "~"  # ✅ 如果未提供 workdir，则使用 home 目录
+
+        remote_script_path = f"/tmp/remote_script_{int(time.time())}.sh"
+
+        # 上传本地脚本
+        if run_script:
+            scp_cmd = [
+                "scp", "-i", KEY_PATH, run_script,
+                f"{USER}@{node}:{remote_script_path}"
+            ]
+            scp_result = subprocess.run(scp_cmd, capture_output=True, text=True)
+            if scp_result.returncode != 0:
+                return False, "", f"SCP 失败: {scp_result.stderr}"
+            print(f"[{node}] ✅ 脚本已复制完成为 {remote_script_path}")
+            
+        # 构造远程执行命令
+        if run_script:
+            remote_cmd = f"cd {image_dir} && chmod +x {remote_script_path} && bash {remote_script_path}"
+        elif run_cmd:
+            remote_cmd = f"cd {image_dir} && {run_cmd}"
+        else:
+            return False, "", "必须指定 run_cmd 或 run_script"
+
+        # 执行 SSH 命令
+        ssh_cmd = build_ssh_cmd("ssh", node) + [remote_cmd]
+        
+        if verbose:
+            # 实时显示输出
+            proc = subprocess.Popen(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in proc.stdout:
+                print(f"[{node}] {line}", end="")
+            proc.wait()
+            return proc.returncode == 0, "", ""
+        else:
+            result = subprocess.run(ssh_cmd, capture_output=True, text=True)
+            return result.returncode == 0, result.stdout, result.stderr
+
+    except Exception as e:
+        return False, "", f"异常错误: {str(e)}"

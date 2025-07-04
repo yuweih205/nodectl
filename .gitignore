@@ -46,3 +46,5 @@ venv/
 .vscode/
 
 
+nodectl/nodes.json
+nodes.json
