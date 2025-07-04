@@ -42,3 +42,7 @@ coverage.xml
 env/
 venv/
 
+# VSCode 等编辑器配置（可选）
+.vscode/
+
+
